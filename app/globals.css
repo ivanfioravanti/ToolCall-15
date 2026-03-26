@@ -60,6 +60,7 @@ code {
 }
 
 .hero-panel,
+.config-panel,
 .scenario-focus,
 .score-card,
 .table-card,
@@ -78,6 +79,46 @@ code {
   gap: 24px;
   padding: 32px;
   border-radius: var(--radius-xl);
+}
+
+.config-panel {
+  padding: 18px 28px;
+  border-radius: var(--radius-md);
+}
+
+.config-grid {
+  display: flex;
+  gap: 24px;
+  flex-wrap: wrap;
+}
+
+.config-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.config-label {
+  font-size: 0.78rem;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+}
+
+.config-input {
+  width: 100px;
+  padding: 6px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.6);
+  color: var(--ink);
+  font-family: var(--font-mono);
+  font-size: 0.88rem;
+}
+
+.config-input:focus {
+  outline: none;
+  border-color: var(--accent);
 }
 
 .eyebrow {

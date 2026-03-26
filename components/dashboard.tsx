@@ -64,8 +64,20 @@ function formatProgress(status: "idle" | "running" | "done" | "error"): string {
 }
 
 function extractVariantLabel(modelName: string): string {
-  const match = modelName.toLowerCase().match(/(\d+(?:\.\d+)?)b/);
-  return match ? `${match[1]}b` : modelName;
+  const match = modelName.toLowerCase().match(/(\d+(?:\.\d+)?)b-a\d+b?(?:-|-*)([a-z0-9]+(?:-[a-z0-9]+)*)/);
+  if (match) {
+    return `${match[1]}b-${match[2]}`;
+  }
+
+  const simple = modelName.toLowerCase().match(/(\d+(?:\.\d+)?)b([a-z0-9\-]*)/);
+  if (!simple) {
+    return modelName;
+  }
+
+  const size = `${simple[1]}b`;
+  const suffix = simple[2].replace(/^-+/, "");
+
+  return suffix ? `${size}-${suffix}` : size;
 }
 
 function variantOrderIndex(modelName: string): number {
@@ -171,6 +183,9 @@ export function Dashboard({ primaryModels, secondaryModels, scenarios, configErr
   const [dialogOpen, setDialogOpen] = useState(false);
   const [logs, setLogs] = useState<Array<{ id: string; message: string }>>([]);
   const [failureDetails, setFailureDetails] = useState<FailureDetails | null>(null);
+  const [showConfig, setShowConfig] = useState(false);
+  const [genParams, setGenParams] = useState({ temperature: 0, top_p: undefined as number | undefined, top_k: undefined as number | undefined, min_p: undefined as number | undefined });
+  const [batchSize, setBatchSize] = useState(4);
   const eventSourceRef = useRef<EventSource | null>(null);
 
   const displayPrimaryModels = useMemo(
@@ -365,6 +380,24 @@ export function Dashboard({ primaryModels, secondaryModels, scenarios, configErr
       params.set("scenarios", targetScenarioId);
     }
 
+    if (genParams.temperature !== 0) {
+      params.set("temperature", String(genParams.temperature));
+    }
+
+    if (genParams.top_p !== undefined) {
+      params.set("top_p", String(genParams.top_p));
+    }
+
+    if (genParams.top_k !== undefined) {
+      params.set("top_k", String(genParams.top_k));
+    }
+
+    if (genParams.min_p !== undefined) {
+      params.set("min_p", String(genParams.min_p));
+    }
+
+    params.set("batch_size", String(batchSize));
+
     const source = new EventSource(`/api/run?${params.toString()}`);
     eventSourceRef.current = source;
 
@@ -459,7 +492,7 @@ export function Dashboard({ primaryModels, secondaryModels, scenarios, configErr
                 models.map((model) => (
                   <tr key={model.id}>
                     <td className="scenario-row-label">
-                      <span className="model-badge">{extractVariantLabel(model.model)}</span>
+                      <span className="model-badge">{model.model}</span>
                     </td>
                     {scenarios.map((scenario) => (
                       <td
@@ -501,8 +534,94 @@ export function Dashboard({ primaryModels, secondaryModels, scenarios, configErr
           >
             {runnerStatus === "running" ? "Benchmark Running" : "Run Benchmark"}
           </button>
+          <button
+            className="ghost-button"
+            type="button"
+            onClick={() => setShowConfig((prev) => !prev)}
+            title="Generation parameters"
+          >
+            {showConfig ? "Hide Config" : "Config"}
+          </button>
         </div>
       </section>
+
+      {showConfig && (
+        <section className="config-panel">
+          <div className="config-grid">
+            <label className="config-field">
+              <span className="config-label">Temperature</span>
+              <input
+                className="config-input"
+                type="number"
+                step="0.1"
+                min="0"
+                max="2"
+                value={genParams.temperature}
+                onChange={(e) => setGenParams((prev) => ({ ...prev, temperature: parseFloat(e.target.value) || 0 }))}
+              />
+            </label>
+            <label className="config-field">
+              <span className="config-label">Top P</span>
+              <input
+                className="config-input"
+                type="number"
+                step="0.05"
+                min="0"
+                max="1"
+                placeholder="default"
+                value={genParams.top_p ?? ""}
+                onChange={(e) => setGenParams((prev) => {
+                  const val = e.target.value === "" ? undefined : parseFloat(e.target.value);
+                  return { ...prev, top_p: val };
+                })}
+              />
+            </label>
+            <label className="config-field">
+              <span className="config-label">Top K</span>
+              <input
+                className="config-input"
+                type="number"
+                step="1"
+                min="0"
+                placeholder="default"
+                value={genParams.top_k ?? ""}
+                onChange={(e) => setGenParams((prev) => {
+                  const val = e.target.value === "" ? undefined : parseInt(e.target.value, 10);
+                  return { ...prev, top_k: val };
+                })}
+              />
+            </label>
+            <label className="config-field">
+              <span className="config-label">Min P</span>
+              <input
+                className="config-input"
+                type="number"
+                step="0.05"
+                min="0"
+                max="1"
+                placeholder="default"
+                value={genParams.min_p ?? ""}
+                onChange={(e) => setGenParams((prev) => {
+                  const val = e.target.value === "" ? undefined : parseFloat(e.target.value);
+                  return { ...prev, min_p: val };
+                })}
+              />
+            </label>
+            <label className="config-field">
+              <span className="config-label">Batch Size</span>
+              <input
+                className="config-input"
+                type="number"
+                step="1"
+                min="1"
+                max="15"
+                value={batchSize}
+                onChange={(e) => setBatchSize(parseInt(e.target.value, 10) || 4)}
+              />
+            </label>
+          </div>
+        </section>
+      )}
 
       <section className="scenario-focus">
         <div className="scenario-focus-header">

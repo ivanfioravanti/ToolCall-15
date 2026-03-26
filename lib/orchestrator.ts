@@ -5,7 +5,7 @@ import {
   SCENARIOS,
   scoreModelResults
 } from "@/lib/benchmark";
-import { callModel, createInitialMessages, type ModelMessage, type ProviderToolCall } from "@/lib/llm-client";
+import { callModel, createInitialMessages, type GenerationParams, type ModelMessage, type ProviderToolCall } from "@/lib/llm-client";
 import type { ModelConfig } from "@/lib/models";
 
 export type RunEvent =
@@ -118,7 +118,8 @@ function formatScenarioTrace(
 async function runScenarioForModel(
   model: ModelConfig,
   scenario: ScenarioDefinition,
-  emit: Emit
+  emit: Emit,
+  params?: GenerationParams
 ): Promise<ModelScenarioResult> {
   const state: ScenarioState = {
     toolCalls: [],
@@ -145,7 +146,7 @@ async function runScenarioForModel(
 
       for (let attempt = 1; attempt <= MAX_PROVIDER_ERROR_ATTEMPTS; attempt += 1) {
         try {
-          response = await callModel(model, messages);
+          response = await callModel(model, messages, params);
           lastError = null;
           break;
         } catch (error) {
@@ -244,11 +245,14 @@ async function runScenarioForModel(
   };
 }
 
-export async function runBenchmark(models: ModelConfig[], emit: Emit, requestedScenarioIds?: string[]): Promise<void> {
+export async function runBenchmark(models: ModelConfig[], emit: Emit, requestedScenarioIds?: string[], params?: GenerationParams, batchSize?: number): Promise<void> {
   const scenarios = resolveScenarios(requestedScenarioIds);
   const resultsByModel: Record<string, ModelScenarioResult[]> = Object.fromEntries(
     models.map((model) => [model.id, [] as ModelScenarioResult[]])
   );
+  const cloudModels = models.filter((model) => model.provider === "openrouter");
+  const localModels = models.filter((model) => model.provider !== "openrouter");
+  const isLocalBatched = (model: ModelConfig) => model.provider === "mlx" || model.provider === "lmstudio";
 
   await emit({
     type: "run_started",
@@ -257,6 +261,16 @@ export async function runBenchmark(models: ModelConfig[], emit: Emit, requestedS
   });
 
   try {
+    const runScenario = async (model: ModelConfig, scenario: ScenarioDefinition) => {
+      const result = await runScenarioForModel(model, scenario, emit, params);
+      return { modelId: model.id, scenarioId: scenario.id, result };
+    };
+
+    const emitResult = async (modelId: string, scenarioId: string, result: ModelScenarioResult) => {
+      resultsByModel[modelId].push(result);
+      await emit({ type: "scenario_result", modelId, scenarioId, result });
+    };
+
     for (const [index, scenario] of scenarios.entries()) {
       await emit({
         type: "scenario_started",
@@ -266,27 +280,58 @@ export async function runBenchmark(models: ModelConfig[], emit: Emit, requestedS
         total: scenarios.length
       });
 
-      const results = await Promise.all(
-        models.map(async (model) => {
-          const result = await runScenarioForModel(model, scenario, emit);
-          return { modelId: model.id, result };
-        })
+      const promises: Promise<void>[] = [];
+
+      if (cloudModels.length > 0) {
+        promises.push(
+          (async () => {
+            const results = await Promise.all(cloudModels.map((model) => runScenario(model, scenario)));
+            for (const { modelId, scenarioId, result } of results) {
+              await emitResult(modelId, scenarioId, result);
+            }
+          })()
+        );
+      }
+
+      promises.push(
+        (async () => {
+          for (const model of localModels.filter((m) => !isLocalBatched(m))) {
+            const { modelId, scenarioId, result } = await runScenario(model, scenario);
+            await emitResult(modelId, scenarioId, result);
+          }
+        })()
       );
 
-      for (const { modelId, result } of results) {
-        resultsByModel[modelId].push(result);
-        await emit({
-          type: "scenario_result",
-          modelId,
-          scenarioId: scenario.id,
-          result
-        });
-      }
+      await Promise.all(promises);
 
       await emit({
         type: "scenario_finished",
         scenarioId: scenario.id
       });
+    }
+
+    for (const model of localModels.filter(isLocalBatched)) {
+      const MLX_BATCH_SIZE = batchSize ?? 4;
+
+      for (let batchStart = 0; batchStart < scenarios.length; batchStart += MLX_BATCH_SIZE) {
+        const batch = scenarios.slice(batchStart, batchStart + MLX_BATCH_SIZE);
+        const results = await Promise.all(
+          batch.map(async (scenario) => {
+            const result = await runScenarioForModel(model, scenario, emit, params);
+            return { scenarioId: scenario.id, result };
+          })
+        );
+
+        for (const { scenarioId, result } of results) {
+          resultsByModel[model.id].push(result);
+          await emit({
+            type: "scenario_result",
+            modelId: model.id,
+            scenarioId,
+            result
+          });
+        }
+      }
     }
 
     const scores = Object.fromEntries(
